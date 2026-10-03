@@ -1,0 +1,37 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+<div style="max-width:680px;margin:1rem auto;padding:1.5rem;background:var(--body-bg,#fff);border-radius:12px">
+  <p>К системе можно подключить один личный Telegram-аккаунт. Он должен состоять в выбранных группах и каналах и иметь право писать в целевую группу.</p>
+  {% if account.is_connected %}
+    <h3>Подключён: {{ account.name }}</h3>
+    <p>{{ account.phone }} · ID {{ account.telegram_id }}</p>
+    <form method="post">{% csrf_token %}<input type="hidden" name="action" value="disconnect"><button class="button" type="submit" onclick="return confirm('Отключить Telegram-аккаунт?')">Отключить</button></form>
+  {% elif account.pending_requires_password %}
+    <h3>Пароль двухэтапной проверки</h3>
+    <form method="post">{% csrf_token %}<input type="hidden" name="action" value="password">{{ password_form.as_p }}<button class="button" type="submit">Подключить</button></form>
+  {% elif account.pending_qr_id %}
+    <h3>Вход по QR-коду</h3>
+    <p>На телефоне откройте Telegram → Настройки → Устройства → Подключить устройство. Наведите камеру на код и подтвердите вход.</p>
+    {% if qr_image %}
+      <img src="data:image/png;base64,{{ qr_image }}" width="280" height="280" alt="QR-код для входа в Telegram" style="display:block;background:white;padding:12px;border-radius:12px;margin:1rem 0">
+      <p>Код обновляется автоматически. После подтверждения страница покажет подключённый аккаунт.</p>
+    {% else %}
+      <p>Готовим QR-код…</p>
+    {% endif %}
+    <script>setTimeout(function(){ window.location.reload(); }, 3000);</script>
+    <form method="post">{% csrf_token %}<input type="hidden" name="action" value="qr"><button class="button" type="submit">Обновить QR-код</button></form>
+    <form method="post" style="margin-top:.75rem">{% csrf_token %}<input type="hidden" name="action" value="cancel_qr"><button class="button" type="submit">Вернуться к другим способам входа</button></form>
+  {% else %}
+    {% if account.pending_qr_error %}<p style="color:#b91c1c">Ошибка QR: {{ account.pending_qr_error }}</p>{% endif %}
+    <h3>Войти через QR-код</h3>
+    <form method="post">{% csrf_token %}<input type="hidden" name="action" value="qr"><button class="button" type="submit">Показать QR-код</button></form>
+    <hr style="margin:1.5rem 0">
+    {% if account.pending_session %}
+      <h3>Ввести код из Telegram</h3>
+      <form method="post">{% csrf_token %}<input type="hidden" name="action" value="code">{{ code_form.as_p }}<button class="button" type="submit">Подтвердить</button></form>
+    {% endif %}
+    <h3>{% if account.pending_session %}Запросить новый код{% else %}Войти по номеру телефона{% endif %}</h3>
+    <form method="post">{% csrf_token %}<input type="hidden" name="action" value="phone">{{ phone_form.as_p }}<button class="button" type="submit">Отправить код</button></form>
+  {% endif %}
+</div>
+{% endblock %}
