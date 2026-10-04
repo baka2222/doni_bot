@@ -5,13 +5,15 @@ from asgiref.sync import async_to_sync
 import qrcode
 from django import forms
 from django.contrib import admin, messages
-from django.http import HttpResponseForbidden, HttpResponseRedirect
+from django.http import HttpResponseForbidden, HttpResponseNotAllowed, HttpResponseRedirect, JsonResponse
 from django.shortcuts import render
 from django.urls import path, reverse
 from django.utils.html import format_html
 
 from .models import Delivery, Keyword, MessageFormat, SourceChat, TargetChat, TelegramAccount
 from .presentation import origin_prefix, render_message
+from .parsing import PARSING_FIELDS, parse_description
+from .contacts import CONTACT_FIELDS
 from .crypto import decrypt
 from .telegram_auth import (
     cancel_qr,
@@ -133,12 +135,75 @@ class TelegramAccountAdmin(admin.ModelAdmin):
         })
 
 
+class ParsingPreviewForm(forms.ModelForm):
+    parsing_sample = forms.CharField(
+        label="Пример поста", required=False, strip=False,
+        widget=forms.Textarea(attrs={"rows": 12, "cols": 80}),
+        help_text="Вставьте исходный пост. Проверка использует настройки из формы; пример не сохраняется и никуда не отправляется.",
+    )
+
+    class Meta:
+        model = SourceChat
+        fields = PARSING_FIELDS
+
+
+class SourceChatForm(ParsingPreviewForm):
+    class Meta(ParsingPreviewForm.Meta):
+        fields = "__all__"
+
+
 @admin.register(SourceChat)
 class SourceChatAdmin(admin.ModelAdmin):
+    form = SourceChatForm
     list_display = ("title", "locator", "chat_id", "enabled", "resolved_at", "last_error")
     list_filter = ("enabled",)
     search_fields = ("title", "locator")
-    readonly_fields = ("chat_id", "last_error", "resolved_at")
+    readonly_fields = ("chat_id", "last_error", "resolved_at", "parsing_preview")
+    fieldsets = (
+        (None, {"fields": ("title", "locator", "enabled")}),
+        ("Разбор описания", {
+            "description": "Настройки действуют только для этого источника. Поиск по ключевым словам и пересылка используют только выделенное описание. Сначала выбираются номера строк, затем границы по маркерам, затем удаляются служебные строки.",
+            "fields": PARSING_FIELDS,
+        }),
+        ("Проверка разбора", {"fields": ("parsing_sample", "parsing_preview")}),
+        ("Контакт продавца / автора", {"fields": CONTACT_FIELDS}),
+        ("Подключение", {"fields": ("chat_id", "last_error", "resolved_at")}),
+    )
+
+    class Media:
+        js = ("scanner/source_parsing.js",)
+
+    def get_urls(self):
+        return [path(
+            "parse-preview/", self.admin_site.admin_view(self.parse_preview_view),
+            name="scanner_sourcechat_parse_preview",
+        )] + super().get_urls()
+
+    def parse_preview_view(self, request):
+        if not (self.has_change_permission(request) or self.has_add_permission(request)):
+            return HttpResponseForbidden("Нет права на настройку источников.")
+        if request.method != "POST":
+            return HttpResponseNotAllowed(["POST"])
+        form = ParsingPreviewForm(request.POST)
+        if not form.is_valid():
+            return JsonResponse({"errors": form.errors.get_json_data()}, status=400)
+        sample = form.cleaned_data["parsing_sample"]
+        description = parse_description(sample, form.instance)
+        return JsonResponse({
+            "text": description.text,
+            "numbered_original": "\n".join(f"{i}: {line}" for i, line in enumerate(sample.splitlines(), 1)),
+        })
+
+    @admin.display(description="Результат")
+    def parsing_preview(self, obj):
+        return format_html(
+            '<button type="button" class="button" id="parse-preview-button" data-url="{}">Проверить разбор</button>'
+            '<p id="parse-preview-status" role="status" aria-live="polite"></p>'
+            '<pre id="parse-preview-result" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>'
+            '<details><summary>Исходные строки с номерами</summary>'
+            '<pre id="parse-preview-lines" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre></details>',
+            reverse("admin:scanner_sourcechat_parse_preview"),
+        )
 
 
 @admin.register(TargetChat)
@@ -162,7 +227,7 @@ class KeywordAdmin(admin.ModelAdmin):
 
 @admin.register(MessageFormat)
 class MessageFormatAdmin(admin.ModelAdmin):
-    fields = ("show_origin", "template", "contact_label", "channel_label", "preview")
+    fields = ("show_origin", "template", "contact_label", "preview")
     readonly_fields = ("preview",)
 
     def has_add_permission(self, request):

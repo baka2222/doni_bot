@@ -13,7 +13,7 @@ from telethon.tl.types import Channel, MessageEntityBold, MessageEntityTextUrl, 
 from telethon.errors import SessionPasswordNeededError
 
 from .matching import match_rule
-from .models import Keyword, MessageFormat, TargetChat, TelegramAccount
+from .models import Keyword, MessageFormat, SourceChat, TargetChat, TelegramAccount
 from .telegram_auth import request_code, verify_code
 from .telegram_auth import request_qr
 from .crypto import encrypt
@@ -276,8 +276,8 @@ class ChannelAndPresentationTests(SimpleTestCase):
     def test_contact_links_for_person_and_channel(self):
         user = User(id=123, username="tailor")
         channel = Channel(id=456, title="Jobs", photo=None, date=None, broadcast=True, username="sewing_jobs")
-        self.assertEqual(contact_action(user, channel, 42), ("Написать в личку", "https://t.me/tailor"))
-        self.assertEqual(contact_action(channel, channel, 42), ("Открыть публикацию", "https://t.me/sewing_jobs/42"))
+        self.assertEqual(contact_action(user), ("Написать в личку", "https://t.me/tailor"))
+        self.assertEqual(contact_action(channel), ("Написать в личку", ""))
 
     def test_template_keeps_original_and_clickable_contact_in_one_text(self):
         original = MessageEntityBold(offset=3, length=4)
@@ -331,7 +331,7 @@ class ChannelAndPresentationTests(SimpleTestCase):
 
         event.get_sender = get_sender
         event.get_chat = get_chat
-        async_to_sync(send_formatted_message)(client, "target", event, MessageFormat(), SimpleNamespace(title="Jobs"), SimpleNamespace(phrase="ищу швею"))
+        async_to_sync(send_formatted_message)(client, "target", event, MessageFormat(), SourceChat(title="Jobs"), SimpleNamespace(phrase="ищу швею"))
         self.assertEqual(len(client.calls), 1)
         self.assertEqual(client.calls[0][0], "message")
         self.assertEqual(client.calls[0][1][1], "Ищу швею\n\nНаписать в личку")
@@ -358,7 +358,7 @@ class ChannelAndPresentationTests(SimpleTestCase):
 
         event.get_sender = get_sender
         event.get_chat = get_chat
-        async_to_sync(send_formatted_message)(client, "target", event, MessageFormat(), SimpleNamespace(title="Jobs"), SimpleNamespace(phrase="ищу швею"))
+        async_to_sync(send_formatted_message)(client, "target", event, MessageFormat(), SourceChat(title="Jobs"), SimpleNamespace(phrase="ищу швею"))
         self.assertEqual(len(client.calls), 1)
         self.assertIs(client.calls[0][0][1], media)
         self.assertEqual(client.calls[0][1]["caption"], "Ищу швею\n\nНаписать в личку")

@@ -1,19 +1,15 @@
 from copy import copy
 from string import Formatter
 
-from telethon.tl.types import Channel, MessageEntityTextUrl, User
+from telethon.tl.types import MessageEntityTextUrl, User
 
 
-def contact_action(sender, source, message_id, contact_label="Написать в личку", channel_label="Открыть публикацию"):
-    """Choose a destination that can actually be opened from the target group."""
-    if isinstance(sender, User) and not sender.bot:
+def contact_action(sender, contact_label="Написать в личку"):
+    """A contact always opens a person, never a source channel or a bot."""
+    if isinstance(sender, User) and not sender.bot and not sender.deleted:
         url = f"https://t.me/{sender.username}" if sender.username else f"tg://user?id={sender.id}"
         return contact_label, url
-    if isinstance(source, Channel):
-        if source.username:
-            return channel_label, f"https://t.me/{source.username}/{message_id}"
-        return channel_label, f"https://t.me/c/{source.id}/{message_id}"
-    return "Контакт не указан", ""
+    return contact_label, ""
 
 
 def utf16_length(value):

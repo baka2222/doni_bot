@@ -1,6 +1,10 @@
 from django.core.exceptions import ValidationError
+from django.core.validators import MinValueValidator
 from django.db import models
 from string import Formatter
+
+from .parsing import DEFAULT_EXCLUDED_LINES
+from .contacts import DEFAULT_CONTACT_LINK_LABELS
 
 
 class SingletonModel(models.Model):
@@ -42,10 +46,60 @@ class TelegramAccount(SingletonModel):
 
 
 class SourceChat(models.Model):
+    class ContactMode(models.TextChoices):
+        AUTO = "auto", "Ссылка продавца из поста, иначе автор сообщения"
+        MESSAGE = "message", "Только ссылка продавца из поста"
+        SENDER = "sender", "Только автор сообщения"
+        NONE = "none", "Без ссылки (только подпись)"
+
     title = models.CharField("Название", max_length=255)
     locator = models.CharField("ID, @username или ссылка", max_length=500, unique=True)
     chat_id = models.BigIntegerField("Telegram ID", null=True, blank=True, editable=False)
     enabled = models.BooleanField("Сканировать", default=True)
+    parse_start_line = models.PositiveIntegerField(
+        "Начинать со строки", default=1, validators=[MinValueValidator(1)],
+        help_text="Номер строки исходного поста, начиная с 1. Пустые строки тоже считаются.",
+    )
+    parse_end_line = models.PositiveIntegerField(
+        "Заканчивать на строке", null=True, blank=True, validators=[MinValueValidator(1)],
+        help_text="Включительно. Пусто — до конца поста.",
+    )
+    parse_skip_last_lines = models.PositiveIntegerField(
+        "Убрать строк с конца", default=0,
+        help_text="Количество последних строк исходного поста, которые не входят в описание.",
+    )
+    parse_start_after = models.TextField(
+        "Начинать после строки с текстом", blank=True,
+        help_text="Маркеры по одному на строке. Начало после первого совпадения с любым маркером в выбранном диапазоне. Если совпадения нет, пост пропускается.",
+    )
+    parse_end_before = models.TextField(
+        "Заканчивать перед строкой с текстом", blank=True,
+        help_text="Маркеры по одному на строке, например «KGS» или «Телефон:». Первый найденный маркер и всё после него отбрасываются. Регистр не важен.",
+    )
+    parse_exclude_lines = models.TextField(
+        "Исключать служебные строки", blank=True, default=DEFAULT_EXCLUDED_LINES,
+        help_text="По одной фразе на строке. Совпадение со всей строкой; эмодзи, знаки препинания и регистр не учитываются.",
+    )
+    parse_exclude_contains = models.TextField(
+        "Исключать строки, содержащие текст", blank=True,
+        help_text="По одной фразе на строке. Удаляет отдельные строки с любым из этих фрагментов, без учёта регистра.",
+    )
+    parse_remove_spoilers = models.BooleanField(
+        "Исключать строки со скрытым текстом", default=True,
+        help_text="Убирает целиком строки со спойлерами Telegram, например скрытый номер телефона. При проверке вставленного текста форматирование спойлеров недоступно.",
+    )
+    contact_mode = models.CharField(
+        "Откуда брать контакт", max_length=16, choices=ContactMode.choices, default=ContactMode.AUTO,
+        help_text="Ссылка ведёт только в личный аккаунт. Если подходящего контакта нет, подпись остаётся некликабельной. Каналы и боты не используются.",
+    )
+    contact_label = models.CharField(
+        "Подпись контакта", max_length=80, blank=True,
+        help_text="Например, «Написать продавцу». Пусто — использовать подпись из раздела «Формат сообщений».",
+    )
+    contact_link_labels = models.TextField(
+        "Как подписана ссылка продавца в исходном посте", default=DEFAULT_CONTACT_LINK_LABELS, blank=True,
+        help_text="Подписи ссылок или кнопок, по одной на строке. Также подходит строка «Продавец: @username». Сравнение без учёта эмодзи, знаков препинания и регистра. Ссылка ищется в полном исходном посте до обрезки описания.",
+    )
     last_error = models.TextField("Ошибка подключения", blank=True, editable=False)
     resolved_at = models.DateTimeField("Проверено", null=True, blank=True, editable=False)
 
@@ -58,8 +112,11 @@ class SourceChat(models.Model):
         return self.title
 
     def clean(self):
+        super().clean()
         if self.locator and not self.locator.strip():
             raise ValidationError({"locator": "Укажите ID или ссылку на группу или канал."})
+        if self.parse_end_line is not None and self.parse_end_line < self.parse_start_line:
+            raise ValidationError({"parse_end_line": "Последняя строка не может быть раньше первой."})
 
     def save(self, *args, **kwargs):
         if self.pk:

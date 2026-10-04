@@ -13,9 +13,11 @@ from telethon.tl.functions.messages import CheckChatInviteRequest
 from telethon.tl.types import Channel, Chat, ChatInviteAlready, MessageMediaWebPage
 
 from scanner.crypto import decrypt, encrypt
+from scanner.contacts import resolve_contact
 from scanner.matching import first_match
 from scanner.models import Delivery, Keyword, MessageFormat, SourceChat, TargetChat, TelegramAccount
-from scanner.presentation import contact_action, origin_prefix, render_message, utf16_length
+from scanner.parsing import parse_description
+from scanner.presentation import origin_prefix, render_message, utf16_length
 from scanner.telegram_auth import complete_login, new_client
 
 logger = logging.getLogger(__name__)
@@ -169,18 +171,20 @@ async def resolve_chat(client, locator, dialog_by_id, group_only=False):
     return dialog_by_id[chat_id].entity, chat_id
 
 
-async def send_formatted_message(client, target, event, message_format, source, rule):
+async def send_formatted_message(client, target, event, message_format, source, rule, description=None):
+    if description is None:
+        description = parse_description(event.raw_text, source, getattr(event.message, "entities", None))
+    if not description.text:
+        raise ValueError("После разбора источника описание пустое")
     original_chat = await event.get_chat()
     if getattr(event.message, "noforwards", False) or getattr(original_chat, "noforwards", False):
         raise ValueError("В источнике запрещено копирование сообщений")
     sender = await event.get_sender()
-    label, url = contact_action(
-        sender, original_chat, event.id, message_format.contact_label, message_format.channel_label
-    )
+    label, url = await resolve_contact(client, source, message_format, event, sender)
     body, entities = render_message(
-        message_format.template, event.raw_text or "", label, url,
+        message_format.template, description.text, label, url,
         source.title if message_format.show_origin else "", rule.phrase,
-        getattr(event.message, "entities", None),
+        description.entities,
         origin_prefix(message_format.template, source.title, message_format.show_origin),
     )
     media = getattr(event.message, "photo", None) or getattr(event.message, "document", None)
@@ -211,15 +215,18 @@ async def scanner_session(encrypted_session):
         target_entity = state["target_entity"]
         if not source or not target_id or not target_entity or event.chat_id == target_id:
             return
-        rule = first_match(event.raw_text or "", state["rules"])
+        description = parse_description(event.raw_text, source, getattr(event.message, "entities", None))
+        if not description.text:
+            return
+        rule = first_match(description.text, state["rules"])
         if not rule:
             return
         try:
-            delivery_id = await sync_to_async(db_claim)(source, event.chat_id, event.id, target_id, rule, event.raw_text or "")
+            delivery_id = await sync_to_async(db_claim)(source, event.chat_id, event.id, target_id, rule, description.text)
             if not delivery_id:
                 return
             try:
-                await send_formatted_message(client, target_entity, event, state["format"], source, rule)
+                await send_formatted_message(client, target_entity, event, state["format"], source, rule, description)
             except Exception as exc:
                 logger.exception("Не удалось отправить %s/%s", event.chat_id, event.id)
                 await sync_to_async(db_finish)(delivery_id, str(exc))
@@ -233,6 +240,9 @@ async def scanner_session(encrypted_session):
         sources, target, rules, message_format = await sync_to_async(db_config)()
         signature = (tuple((s.pk, s.locator) for s in sources), target.locator if target else None)
         if signature == state["signature"] and time.monotonic() - state["last_resolved"] < 300:
+            # Refresh source parsing options without re-resolving Telegram chats.
+            sources_by_pk = {source.pk: source for source in sources}
+            state["sources"] = {chat_id: sources_by_pk[source.pk] for chat_id, source in state["sources"].items()}
             state["rules"] = rules
             state["format"] = message_format
             return
