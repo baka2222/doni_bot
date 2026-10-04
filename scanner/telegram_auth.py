@@ -12,6 +12,7 @@ from telethon.sessions import StringSession
 from .crypto import decrypt, encrypt
 
 logger = logging.getLogger(__name__)
+LOGIN_CODE_TTL = timedelta(minutes=15)
 
 
 def new_client(session=""):
@@ -37,7 +38,11 @@ async def request_code(account, phone):
 
 
 async def verify_code(account, code="", password=""):
-    if not account.pending_session or not account.pending_at or timezone.now() - account.pending_at > timedelta(minutes=15):
+    if not account.pending_session or pending_login_expired(account):
+        clear_pending_login(account)
+        await sync_to_async(account.save)(update_fields=[
+            "pending_session", "pending_phone_hash", "pending_at", "pending_requires_password",
+        ])
         raise ValueError("Код устарел. Запросите новый.")
     client = new_client(decrypt(account.pending_session))
     await client.connect()
@@ -64,6 +69,17 @@ def clear_qr(account):
     account.pending_qr_error = ""
 
 
+def pending_login_expired(account):
+    return not account.pending_at or timezone.now() - account.pending_at > LOGIN_CODE_TTL
+
+
+def clear_pending_login(account):
+    account.pending_session = ""
+    account.pending_phone_hash = ""
+    account.pending_at = None
+    account.pending_requires_password = False
+
+
 def cancel_qr(account):
     clear_qr(account)
     account.pending_at = None
@@ -77,9 +93,7 @@ def request_qr(account):
     account.pending_qr_url = ""
     account.pending_qr_expires_at = None
     account.pending_qr_error = ""
-    account.pending_session = ""
-    account.pending_phone_hash = ""
-    account.pending_requires_password = False
+    clear_pending_login(account)
     account.pending_at = timezone.now()
     account.phone = ""
     account.save()
@@ -114,10 +128,7 @@ async def revoke_account(account):
         except Exception:
             logger.exception("Не удалось завершить Telegram-сессию удалённо; локальные данные будут удалены")
     account.encrypted_session = ""
-    account.pending_session = ""
-    account.pending_phone_hash = ""
-    account.pending_at = None
-    account.pending_requires_password = False
+    clear_pending_login(account)
     clear_qr(account)
     account.connected_at = None
     account.telegram_id = None

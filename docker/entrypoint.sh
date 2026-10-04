@@ -7,6 +7,7 @@ if [ "$1" = "web" ]; then
   if [ -n "$DJANGO_SUPERUSER_USERNAME" ] && [ -n "$DJANGO_SUPERUSER_PASSWORD" ]; then
     python manage.py ensure_admin
   fi
+  python manage.py seed_trigger_phrases
   exec gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2 --access-logfile -
 fi
 

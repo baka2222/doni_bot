@@ -9,6 +9,7 @@
   {% elif account.pending_requires_password %}
     <h3>Пароль двухэтапной проверки</h3>
     <form method="post">{% csrf_token %}<input type="hidden" name="action" value="password">{{ password_form.as_p }}<button class="button" type="submit">Подключить</button></form>
+    <form method="post" style="margin-top:1rem">{% csrf_token %}<input type="hidden" name="action" value="restart_login"><button class="button" type="submit">Запросить новый код</button></form>
   {% elif account.pending_qr_id %}
     <h3>Вход по QR-коду</h3>
     <p>На телефоне откройте Telegram → Настройки → Устройства → Подключить устройство. Наведите камеру на код и подтвердите вход.</p>

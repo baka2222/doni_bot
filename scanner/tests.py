@@ -114,6 +114,45 @@ class AdminTests(TestCase):
         account.refresh_from_db()
         self.assertFalse(account.pending_qr_id)
 
+    def test_two_factor_step_can_be_restarted(self):
+        user = get_user_model().objects.create_superuser("admin", password="a-long-test-password")
+        self.client.force_login(user)
+        account = TelegramAccount.objects.create(
+            pending_session="encrypted-session",
+            pending_phone_hash="hash",
+            pending_at=timezone.now(),
+            pending_requires_password=True,
+        )
+
+        response = self.client.get("/admin/scanner/telegramaccount/connect/")
+        self.assertContains(response, "Запросить новый код")
+        response = self.client.post(
+            "/admin/scanner/telegramaccount/connect/", {"action": "restart_login"}
+        )
+
+        self.assertEqual(response.status_code, 302)
+        account.refresh_from_db()
+        self.assertFalse(account.pending_session)
+        self.assertFalse(account.pending_requires_password)
+
+    def test_expired_two_factor_step_is_reset_on_page_open(self):
+        user = get_user_model().objects.create_superuser("admin", password="a-long-test-password")
+        self.client.force_login(user)
+        account = TelegramAccount.objects.create(
+            pending_session="encrypted-session",
+            pending_phone_hash="hash",
+            pending_at=timezone.now() - timedelta(minutes=16),
+            pending_requires_password=True,
+        )
+
+        response = self.client.get("/admin/scanner/telegramaccount/connect/")
+
+        self.assertContains(response, "Предыдущий код устарел")
+        self.assertContains(response, "Войти по номеру телефона")
+        account.refresh_from_db()
+        self.assertFalse(account.pending_session)
+        self.assertFalse(account.pending_requires_password)
+
 
 class TelegramConnectionTests(TestCase):
     def test_code_flow_saves_only_encrypted_session(self):

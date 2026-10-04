@@ -13,7 +13,15 @@ from django.utils.html import format_html
 from .models import Delivery, Keyword, MessageFormat, SourceChat, TargetChat, TelegramAccount
 from .presentation import origin_prefix, render_message
 from .crypto import decrypt
-from .telegram_auth import cancel_qr, request_code, request_qr, revoke_account, verify_code
+from .telegram_auth import (
+    cancel_qr,
+    clear_pending_login,
+    pending_login_expired,
+    request_code,
+    request_qr,
+    revoke_account,
+    verify_code,
+)
 
 
 class PhoneForm(forms.Form):
@@ -56,6 +64,12 @@ class TelegramAccountAdmin(admin.ModelAdmin):
         if not request.user.is_superuser:
             return HttpResponseForbidden("Только суперпользователь может управлять Telegram-аккаунтом.")
         account, _ = TelegramAccount.objects.get_or_create(pk=1)
+        if account.pending_session and pending_login_expired(account):
+            clear_pending_login(account)
+            account.save(update_fields=[
+                "pending_session", "pending_phone_hash", "pending_at", "pending_requires_password",
+            ])
+            messages.warning(request, "Предыдущий код устарел. Запросите новый код или войдите по QR-коду.")
         if request.method == "POST":
             action = request.POST.get("action")
             try:
@@ -65,6 +79,13 @@ class TelegramAccountAdmin(admin.ModelAdmin):
                     return HttpResponseRedirect(request.path)
                 elif action == "cancel_qr" and account.pending_qr_id and not account.is_connected:
                     cancel_qr(account)
+                    return HttpResponseRedirect(request.path)
+                elif action == "restart_login" and not account.is_connected:
+                    clear_pending_login(account)
+                    account.save(update_fields=[
+                        "pending_session", "pending_phone_hash", "pending_at", "pending_requires_password",
+                    ])
+                    messages.info(request, "Введите номер телефона, чтобы запросить новый код.")
                     return HttpResponseRedirect(request.path)
                 elif action == "phone" and not account.is_connected:
                     form = PhoneForm(request.POST)
